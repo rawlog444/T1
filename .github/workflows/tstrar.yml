@@ -1,4 +1,4 @@
-name: MiTrixs
+name: MiTrixsRaR
 
 on:
   workflow_dispatch:
@@ -42,7 +42,7 @@ defaults:
 
 env:
   RDP_USER: mitrixs
-  RDP_PASS: ${{ secrets.RDP_PASS }}  # ← Now from secret
+  RDP_PASS: ${{ secrets.RDP_PASS }}
   TS_HOSTNAME: MiTrixs
 
 jobs:
@@ -100,20 +100,28 @@ jobs:
           Start-Service Tailscale -ErrorAction SilentlyContinue
           & "C:\Program Files\Tailscale\tailscale.exe" version
 
-      - name: 📦 Cache WinRAR
-        id: cache-winrar
-        uses: actions/cache@v4
+      - name: 📦 Restore WinRAR cache
+        id: cache-winrar-restore
+        uses: actions/cache/restore@v4
         with:
           path: |
             C:\ProgramData\chocolatey\lib\winrar
             C:\Program Files\WinRAR
           key: winrar-windows-latest-v3
-          save-always: true
 
       - name: Install WinRAR (if not cached)
-        if: steps.cache-winrar.outputs.cache-hit != 'true'
+        if: steps.cache-winrar-restore.outputs.cache-hit != 'true'
         run: |
           choco install -y winrar
+
+      - name: 💾 Save WinRAR cache
+        if: steps.cache-winrar-restore.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            C:\ProgramData\chocolatey\lib\winrar
+            C:\Program Files\WinRAR
+          key: ${{ steps.cache-winrar-restore.outputs.cache-primary-key }}
 
       - name: 🔐 Enable RDP user + firewall
         run: |
