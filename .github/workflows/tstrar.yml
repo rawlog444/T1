@@ -106,9 +106,9 @@ jobs:
         with:
           path: |
             C:\ProgramData\chocolatey\lib\winrar
-            C:\ProgramData\chocolatey\bin\WinRAR*
             C:\Program Files\WinRAR
-          key: winrar-windows-latest-v1
+          key: winrar-windows-latest-v3
+          save-always: true
 
       - name: Install WinRAR (if not cached)
         if: steps.cache-winrar.outputs.cache-hit != 'true'
