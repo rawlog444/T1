@@ -190,31 +190,17 @@ jobs:
           
           Write-Host "Extracting RAR archive..."
           & $7z x "$rarPath" -o"$extractDir" -y
-          
-          # Detect base path inside extraction directory
-          $filesDir = "$extractDir\Files"
-          if (-not (Test-Path $filesDir)) { $filesDir = $extractDir }
 
-          # 3. Install IDM
-          $idmInstaller = Get-ChildItem -Path $extractDir -Filter "idman*.exe" -Recurse | Select-Object -First 1
-          if ($idmInstaller) {
-            Write-Host "Installing IDM silently from $($idmInstaller.FullName)..."
-            Start-Process -FilePath $idmInstaller.FullName -ArgumentList "/s" -Wait
-          } else {
-            Write-Warning "IDM Installer not found in archive."
-          }
-
-          # 4. Copy JSON Config to Desktop
+          # 3. Copy JSON Config to Desktop
           $jsonSrc = Get-ChildItem -Path $extractDir -Filter "*.json" -Recurse | Select-Object -First 1
           if ($jsonSrc) {
             Copy-Item -Path $jsonSrc.FullName -Destination "$userDesktop\" -Force
             Write-Host "Copied AutoClicker JSON config to Desktop."
           }
 
-          # 5. Configure Local Chrome Extensions & Auto-Start
+          # 4. Configure Local Chrome Extensions & Desktop Shortcut
           $chromeExe = "C:\Program Files\Google\Chrome\Application\chrome.exe"
           
-          # Locate unpacked extension directories dynamically
           $ext1 = Get-ChildItem -Path $extractDir -Directory -Recurse | Where-Object { $_.Name -like "*animephahe downloader*" } | Select-Object -First 1
           $ext2 = Get-ChildItem -Path $extractDir -Directory -Recurse | Where-Object { $_.Name -like "*Animephahe Episodes*" } | Select-Object -First 1
           $ext3 = Get-ChildItem -Path $extractDir -Directory -Recurse | Where-Object { $_.Name -like "*yt downloader*" } | Select-Object -First 1
@@ -226,25 +212,31 @@ jobs:
 
           $loadExtStr = if ($extArgs.Count -gt 0) { "--load-extension=" + ($extArgs -join ",") } else { "" }
 
-          # Create Desktop Shortcut for Chrome
           $wsh = New-Object -ComObject WScript.Shell
           $shortcut = $wsh.CreateShortcut("$userDesktop\Google Chrome.lnk")
           $shortcut.TargetPath = $chromeExe
           if ($loadExtStr) { $shortcut.Arguments = $loadExtStr }
           $shortcut.Save()
 
-          # 6. Put Startup Command in User's Startup Folder (Fires when RDP connects)
+          # 5. Build Login Script (Executes IDM setup, Patch, and Chrome inside RDP session)
           $cmdBatch = "$userStartup\on_login.bat"
+          $idmInstaller = Get-ChildItem -Path $extractDir -Filter "idman*.exe" -Recurse | Select-Object -First 1
           $idmPatch = Get-ChildItem -Path $extractDir -Filter "*Crack*.exe" -Recurse | Select-Object -First 1
 
           $batchContent = "@echo off`r`n"
+          if ($idmInstaller) {
+            $batchContent += "echo Installing IDM...`r`n"
+            $batchContent += "start `"`" /wait `"$($idmInstaller.FullName)`" /s`r`n"
+          }
           if ($idmPatch) {
+            $batchContent += "echo Applying Patch...`r`n"
             $batchContent += "start `"`" `"$($idmPatch.FullName)`"`r`n"
           }
           $batchContent += "start `"`" `"$chromeExe`" $loadExtStr`r`n"
 
           Set-Content -Path $cmdBatch -Value $batchContent -Force
           Write-Host "Login automation script generated at $cmdBatch"
+
 
       - name: 🧹 Purge devices (Startup)
         run: |
