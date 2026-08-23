@@ -76,7 +76,6 @@ jobs:
             Write-Error "Missing required inputs/secrets"; exit 1
           }
 
-          # Mask secret tokens in runner logs
           Write-Host "::add-mask::$apiKey"
           Write-Host "::add-mask::$authKey"
           Write-Host "::add-mask::$pat"
@@ -96,38 +95,15 @@ jobs:
           "runtime=$runtime"   | Out-File -Append $env:GITHUB_OUTPUT
           "loops=$loops"       | Out-File -Append $env:GITHUB_OUTPUT
           "jazzurl=$env:RAW_JAZZ" | Out-File -Append $env:GITHUB_OUTPUT
-          Write-Host "Resolved: test=$isTest, runtime=$runtime, loops=$loops"
 
-      - name: ⚙️ Install Tailscale (if missing) & show version
+      - name: ⚙️ Install Tailscale
         run: |
           $exe = "C:\Program Files\Tailscale\tailscale.exe"
           if (-not (Test-Path $exe)) {
-            Write-Host "Tailscale not found at $exe — attempting installer download + run..."
             $dst = "$env:TEMP\tailscale-setup-latest.exe"
-            if (-not (Test-Path $dst)) {
-              Invoke-WebRequest -Uri 'https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe' -OutFile $dst -UseBasicParsing
-            }
+            Invoke-WebRequest -Uri 'https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe' -OutFile $dst -UseBasicParsing
             Start-Process -FilePath $dst -ArgumentList "/quiet" -Wait
-
-            $maxWait = 60
-            $slept = 0
-            while (-not (Test-Path $exe) -and $slept -lt $maxWait) {
-              Start-Sleep -Seconds 2
-              $slept += 2
-            }
-
-            if (-not (Test-Path $exe)) {
-              Write-Warning "Installer did not create $exe within $maxWait seconds. Trying Chocolatey install..."
-              choco install -y tailscale
-              $maxWait2 = 60
-              $slept = 0
-              while (-not (Test-Path $exe) -and $slept -lt $maxWait2) {
-                Start-Sleep -Seconds 2
-                $slept += 2
-              }
-            }
           }
-
           if (Test-Path $exe) {
             Start-Service Tailscale -ErrorAction SilentlyContinue
             & $exe version
@@ -136,92 +112,48 @@ jobs:
             exit 1
           }
 
-      - name: 📦 Install WinRAR & Free Up Disk Space (30GB+)
+      - name: 📦 Install Tools & Free Disk Space
         run: |
-          # Install WinRAR directly without cache overhead
-          choco install -y winrar --no-progress
-
-          # Delete pre-installed SDKs/Compilers to reclaim 30GB+ disk space
-          Write-Host "Reclaiming disk space..."
-          $paths = @(
-            $env:ANDROID_HOME, 
-            $env:ANDROID_NDK_HOME, 
-            "C:\Microsoft\AndroidNDK*",
-            "C:\cabal", 
-            "C:\ghc", 
-            "C:\julia"
-          )
+          choco install -y 7zip winrar --no-progress
+          
+          # Delete heavy SDKs
+          $paths = @($env:ANDROID_HOME, $env:ANDROID_NDK_HOME, "C:\cabal", "C:\ghc", "C:\julia")
           foreach ($p in $paths) {
-            if ($p -and (Test-Path $p)) {
-              Remove-Item -Path $p -Recurse -Force -ErrorAction SilentlyContinue
-            }
+            if ($p -and (Test-Path $p)) { Remove-Item -Path $p -Recurse -Force -ErrorAction SilentlyContinue }
           }
 
       - name: 🚀 Optimize Windows Environment & RDP Experience
         run: |
-          # 1. Disable Heavy Unnecessary Background Services
           'wuauserv','Spooler','WSearch','SysMain','DiagTrack','MapsBroker' | ForEach-Object { 
             Set-Service -Name $_ -StartupType Disabled -ErrorAction SilentlyContinue
             Stop-Service -Name $_ -Force -ErrorAction SilentlyContinue
           }
 
-          # 2. Enable 60 FPS RDP Rendering & Force Clipboard Sharing
           New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations' -Name "DWMFrameRate" -PropertyType Dword -Value 60 -Force
           
           $tsPath = "HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services"
           if (-not (Test-Path $tsPath)) { New-Item -Path $tsPath -Force | Out-Null }
           Set-ItemProperty -Path $tsPath -Name "fDisableClip" -Value 0 -Force
 
-          # 3. Enable Classic Windows 10 Right-Click Menu
-          $clsidKey = "HKCU:\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32"
-          if (-not (Test-Path $clsidKey)) { New-Item -Path $clsidKey -Force | Out-Null }
-          Set-ItemProperty -Path $clsidKey -Name "(Default)" -Value ""
-
-          # 4. Enable System-Wide Dark Mode
-          $themePath = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize"
-          if (-not (Test-Path $themePath)) { New-Item -Path $themePath -Force | Out-Null }
-          Set-ItemProperty -Path $themePath -Name "AppsUseLightTheme" -Value 0 -Force
-          Set-ItemProperty -Path $themePath -Name "SystemUsesLightTheme" -Value 0 -Force
-
-          # 5. Set Pure Pitch-Black Solid Color Wallpaper
-          Set-ItemProperty -Path 'HKCU:\Control Panel\Colors' -Name "Background" -Value "0 0 0" -Force
-          Set-ItemProperty -Path 'HKCU:\Control Panel\Desktop' -Name "Wallpaper" -Value "" -Force
-
-          # 6. Adjust Performance Options (Disable Visual FX for Maximum Speed)
-          $vfxPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects"
-          if (-not (Test-Path $vfxPath)) { New-Item -Path $vfxPath -Force | Out-Null }
-          Set-ItemProperty -Path $vfxPath -Name "VisualFXSetting" -Value 2 -Force
-
-          # 7. Set Larger Cursor Scheme
-          Set-ItemProperty -Path 'HKCU:\Control Panel\Cursors' -Name "Scheme Source" -Value 1 -Force
-          Set-ItemProperty -Path 'HKCU:\Control Panel\Cursors' -Name "CursorBaseSize" -Value 32 -Force
-
-          # 8. Disable Windows Defender & SmartScreen (Prevents IDM Patch Block)
+          # Disable Defender Realtime Monitoring
           Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction SilentlyContinue
           Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer' -Name "SmartScreenEnabled" -Value "Off"
 
-          # 9. Restart Explorer to load new registry settings
-          Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
-
-      - name: 🌐 Chrome Enterprise Policies (Extensions & First-Run Bypass)
+      - name: 🌐 Chrome Enterprise Policies (Web Store Extensions)
         run: |
           $chromePolicy = "HKLM:\SOFTWARE\Policies\Google\Chrome"
           if (-not (Test-Path $chromePolicy)) { New-Item -Path $chromePolicy -Force | Out-Null }
 
-          # First-Run Bypass Policies
           Set-ItemProperty -Path $chromePolicy -Name "PromoteFirstRunChoiceOption" -Value 0 -Force
           Set-ItemProperty -Path $chromePolicy -Name "HideFirstRunExperience" -Value 1 -Force
 
-          # Auto-Install Web Store Extensions
           $policyPath = "$chromePolicy\ExtensionInstallForcelist"
           if (-not (Test-Path $policyPath)) { New-Item -Path $policyPath -Force | Out-Null }
 
-          # 1. Auto Clicker - AutoFill
           Set-ItemProperty -Path $policyPath -Name "1" -Value "iapifmceeokikomajpccajhjpacjmibe;https://clients2.google.com/service/update2/crx"
-          # 2. AdGuard AdBlocker
           Set-ItemProperty -Path $policyPath -Name "2" -Value "bgnkhhnnamicmpeenaelnjfhikgbkllg;https://clients2.google.com/service/update2/crx"
 
-      - name: 🔐 Enable RDP user + firewall
+      - name: 🔐 Provision User Account
         run: |
           $u="${{ env.RDP_USER }}"; $p="${{ env.RDP_PASS }}"
           $sec = ConvertTo-SecureString $p -AsPlainText -Force
@@ -239,106 +171,95 @@ jobs:
       - name: 📥 Download Setup RAR & Execute Full Automation
         run: |
           $url = "${{ steps.cfg.outputs.jazzurl }}"
-          if ($url -and $url.Trim() -ne "") {
-            Write-Host "Downloading setup archive from Jazz Drive..."
-            $rarPath = "$env:TEMP\Files.rar"
-            $extractDir = "C:\SetupTools"
-            New-Item -ItemType Directory -Path $extractDir -Force | Out-Null
+          $rarPath = "$env:TEMP\Files.rar"
+          $extractDir = "C:\SetupTools"
+          $userDesktop = "C:\Users\mitrixs\Desktop"
+          $userStartup = "C:\Users\mitrixs\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup"
 
-            try {
-              # 1. Download RAR File from Jazz Drive API
-              Invoke-WebRequest -Uri $url -OutFile $rarPath -UseBasicParsing
+          New-Item -ItemType Directory -Path $extractDir -Force | Out-Null
+          New-Item -ItemType Directory -Path $userDesktop -Force | Out-Null
+          New-Item -ItemType Directory -Path $userStartup -Force | Out-Null
 
-              # 2. UnRAR Archive via WinRAR CLI
-              $winRarExe = "C:\Program Files\WinRAR\UnRAR.exe"
-              if (Test-Path $winRarExe) {
-                & $winRarExe x -y $rarPath "$extractDir\"
-                Write-Host "Extracted files to $extractDir"
+          # 1. Download RAR
+          Write-Host "Downloading RAR from Jazz Drive..."
+          Invoke-WebRequest -Uri $url -OutFile $rarPath -UserAgent "Mozilla/5.0" -UseBasicParsing
 
-                $filesDir = "$extractDir\Files"
+          # 2. Extract using 7-Zip
+          $7z = "C:\Program Files\7-Zip\7z.exe"
+          if (-not (Test-Path $7z)) { $7z = "7z" }
+          
+          Write-Host "Extracting RAR archive..."
+          & $7z x "$rarPath" -o"$extractDir" -y
+          
+          # Detect base path inside extraction directory
+          $filesDir = "$extractDir\Files"
+          if (-not (Test-Path $filesDir)) { $filesDir = $extractDir }
 
-                # 3. Auto-install IDM (Build 1f) with non-blocking process handle
-                $idmInstaller = "$filesDir\idman643build1f.exe"
-                if (Test-Path $idmInstaller) {
-                  Write-Host "Installing IDM silently..."
-                  $proc = Start-Process -FilePath $idmInstaller -ArgumentList "/s" -PassThru
-
-                  # Wait up to 30 seconds max for installer to finish
-                  if (-not $proc.WaitForExit(30000)) {
-                    Write-Host "Installer execution time exceeded, releasing process handle..."
-                  }
-
-                  # Kill lingering background handles spawned by IDM installer
-                  Get-Process -Name "idman643build1f", "IDMan", "IEMonitor" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-                  Write-Host "IDM installation step completed."
-                }
-
-                # 4. Auto-launch IDM Patch Executable on screen
-                $idmPatch = "$filesDir\IDM_6.4x_Crack_v20.6.exe"
-                if (Test-Path $idmPatch) {
-                  Write-Host "Launching IDM Patch..."
-                  Start-Process -FilePath $idmPatch
-                }
-
-                # 5. Copy JSON Config File directly to Desktop
-                $userDesktop = "C:\Users\mitrixs\Desktop"
-                if (-not (Test-Path $userDesktop)) { New-Item -ItemType Directory -Path $userDesktop -Force | Out-Null }
-                
-                $jsonSrc = "$filesDir\All Configurations (1)(1).json"
-                if (Test-Path $jsonSrc) {
-                  Copy-Item -Path $jsonSrc -Destination "$userDesktop\" -Force
-                  Write-Host "Copied AutoClicker JSON config to Desktop"
-                }
-
-                # 6. Create Desktop Chrome Shortcut + Auto-Launch Registry key
-                $chromeExe = "C:\Program Files\Google\Chrome\Application\chrome.exe"
-                if (Test-Path $chromeExe) {
-                  $ext1 = "$filesDir\animephahe downloader automation"
-                  $ext2 = "$filesDir\Animephahe Episodes Automation"
-                  $ext3 = "$filesDir\yt downloader"
-                  
-                  $chromeArgs = "--load-extension=`"$ext1`",`"$ext2`",`"$ext3`""
-                  
-                  # Create Desktop Shortcut
-                  $wsh = New-Object -ComObject WScript.Shell
-                  $shortcut = $wsh.CreateShortcut("$userDesktop\Google Chrome.lnk")
-                  $shortcut.TargetPath = $chromeExe
-                  $shortcut.Arguments = $chromeArgs
-                  $shortcut.Save()
-
-                  # Set Registry Auto-Run on Boot
-                  $runKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
-                  if (-not (Test-Path $runKey)) { New-Item -Path $runKey -Force | Out-Null }
-                  $autoCmd = "`"$chromeExe`" $chromeArgs"
-                  Set-ItemProperty -Path $runKey -Name "AutoChrome" -Value $autoCmd -Force
-                  Write-Host "Configured Google Chrome auto-launch with unpacked extensions."
-                }
-              }
-            } catch {
-              Write-Warning "Setup automation error: $_"
-            }
+          # 3. Install IDM
+          $idmInstaller = Get-ChildItem -Path $extractDir -Filter "idman*.exe" -Recurse | Select-Object -First 1
+          if ($idmInstaller) {
+            Write-Host "Installing IDM silently from $($idmInstaller.FullName)..."
+            Start-Process -FilePath $idmInstaller.FullName -ArgumentList "/s" -Wait
+          } else {
+            Write-Warning "IDM Installer not found in archive."
           }
 
-      - name: 🧹 PURGE any devices containing 'mitrixs' (startup)
+          # 4. Copy JSON Config to Desktop
+          $jsonSrc = Get-ChildItem -Path $extractDir -Filter "*.json" -Recurse | Select-Object -First 1
+          if ($jsonSrc) {
+            Copy-Item -Path $jsonSrc.FullName -Destination "$userDesktop\" -Force
+            Write-Host "Copied AutoClicker JSON config to Desktop."
+          }
+
+          # 5. Configure Local Chrome Extensions & Auto-Start
+          $chromeExe = "C:\Program Files\Google\Chrome\Application\chrome.exe"
+          
+          # Locate unpacked extension directories dynamically
+          $ext1 = Get-ChildItem -Path $extractDir -Directory -Recurse | Where-Object { $_.Name -like "*animephahe downloader*" } | Select-Object -First 1
+          $ext2 = Get-ChildItem -Path $extractDir -Directory -Recurse | Where-Object { $_.Name -like "*Animephahe Episodes*" } | Select-Object -First 1
+          $ext3 = Get-ChildItem -Path $extractDir -Directory -Recurse | Where-Object { $_.Name -like "*yt downloader*" } | Select-Object -First 1
+
+          $extArgs = @()
+          if ($ext1) { $extArgs += "`"$($ext1.FullName)`"" }
+          if ($ext2) { $extArgs += "`"$($ext2.FullName)`"" }
+          if ($ext3) { $extArgs += "`"$($ext3.FullName)`"" }
+
+          $loadExtStr = if ($extArgs.Count -gt 0) { "--load-extension=" + ($extArgs -join ",") } else { "" }
+
+          # Create Desktop Shortcut for Chrome
+          $wsh = New-Object -ComObject WScript.Shell
+          $shortcut = $wsh.CreateShortcut("$userDesktop\Google Chrome.lnk")
+          $shortcut.TargetPath = $chromeExe
+          if ($loadExtStr) { $shortcut.Arguments = $loadExtStr }
+          $shortcut.Save()
+
+          # 6. Put Startup Command in User's Startup Folder (Fires when RDP connects)
+          $cmdBatch = "$userStartup\on_login.bat"
+          $idmPatch = Get-ChildItem -Path $extractDir -Filter "*Crack*.exe" -Recurse | Select-Object -First 1
+
+          $batchContent = "@echo off`r`n"
+          if ($idmPatch) {
+            $batchContent += "start `"`" `"$($idmPatch.FullName)`"`r`n"
+          }
+          $batchContent += "start `"`" `"$chromeExe`" $loadExtStr`r`n"
+
+          Set-Content -Path $cmdBatch -Value $batchContent -Force
+          Write-Host "Login automation script generated at $cmdBatch"
+
+      - name: 🧹 Purge devices (Startup)
         run: |
           $hdr = @{ Authorization = "Bearer ${{ steps.cfg.outputs.apikey }}" }
           $tn  = [uri]::EscapeDataString("${{ steps.cfg.outputs.tailnet }}")
-          $match = { param($d)
-            ($d.name -match '(?i)mitrixs') -or ($d.hostname -match '(?i)mitrixs') -or ($d.DNSName -match '(?i)mitrixs')
-          }
           try {
             $resp = Invoke-RestMethod -Method GET -Headers $hdr -Uri "https://api.tailscale.com/api/v2/tailnet/$tn/devices"
             foreach ($d in $resp.devices) {
-              if (& $match $d) {
-                try {
-                  Invoke-RestMethod -Method DELETE -Headers $hdr -Uri ("https://api.tailscale.com/api/v2/device/{0}" -f $d.id) | Out-Null
-                  Write-Host "Deleted at start: $($d.name)"
-                } catch {}
+              if (($d.name -match '(?i)mitrixs') -or ($d.hostname -match '(?i)mitrixs')) {
+                Invoke-RestMethod -Method DELETE -Headers $hdr -Uri ("https://api.tailscale.com/api/v2/device/{0}" -f $d.id) | Out-Null
               }
             }
-          } catch { Write-Warning "Startup purge failed: $_" }
+          } catch {}
 
-      - name: 🔗 Tailscale up (hostname=mitrixs) + show IP/FQDN/DERP
+      - name: 🔗 Tailscale Up
         id: up
         run: |
           $ts = "C:\Program Files\Tailscale\tailscale.exe"
@@ -347,14 +268,7 @@ jobs:
           Start-Sleep -Seconds 2
 
           $ip4 = (& $ts ip -4 | Select-Object -First 1)
-          $status = & $ts status --json | ConvertFrom-Json
-          $fqdn = $status.Self.DNSName
-          $derp = $status.Self.DERP
-          "ip4=$ip4"   | Out-File -Append $env:GITHUB_OUTPUT
-          "fqdn=$fqdn" | Out-File -Append $env:GITHUB_OUTPUT
-          "derp=$derp" | Out-File -Append $env:GITHUB_OUTPUT
-
-          "### RDP Access`nHost: $env:TS_HOSTNAME`nIPv4: $ip4`nMagicDNS: $fqdn`nDERP: $derp`nUser: $env:RDP_USER`n(Password set via secret — not displayed)" | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "### RDP Access`nHost: $env:TS_HOSTNAME`nIPv4: $ip4`nUser: $env:RDP_USER" | Out-File $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
 
       - name: ⏳ Keep alive
         run: |
@@ -362,30 +276,21 @@ jobs:
           $end = (Get-Date).AddMinutes($mins)
           while ((Get-Date) -lt $end) {
             $ts = $end - (Get-Date)
-            $hrs = [int][math]::Floor($ts.TotalHours)
-            $remMins = [int]$ts.Minutes
-            $formatted = "{0:D2}h:{1:D2}m remaining" -f $hrs, $remMins
-            
+            $formatted = "{0:D2}h:{1:D2}m remaining" -f [int][math]::Floor($ts.TotalHours), [int]$ts.Minutes
             Write-Host "⏳ RDP Active | Time Left: $formatted"
             Start-Sleep -Seconds 180
           }
 
-      - name: 🧹 PURGE any devices containing 'mitrixs' (exit)
+      - name: 🧹 Purge devices (Exit)
         if: always()
         run: |
           $hdr = @{ Authorization = "Bearer ${{ steps.cfg.outputs.apikey }}" }
           $tn  = [uri]::EscapeDataString("${{ steps.cfg.outputs.tailnet }}")
-          $match = { param($d)
-            ($d.name -match '(?i)mitrixs') -or ($d.hostname -match '(?i)mitrixs') -or ($d.DNSName -match '(?i)mitrixs')
-          }
           try {
             $resp = Invoke-RestMethod -Method GET -Headers $hdr -Uri "https://api.tailscale.com/api/v2/tailnet/$tn/devices"
             foreach ($d in $resp.devices) {
-              if (& $match $d) {
-                try {
-                  Invoke-RestMethod -Method DELETE -Headers $hdr -Uri ("https://api.tailscale.com/api/v2/device/{0}" -f $d.id) | Out-Null
-                  Write-Host "Deleted at exit: $($d.name)"
-                } catch {}
+              if (($d.name -match '(?i)mitrixs') -or ($d.hostname -match '(?i)mitrixs')) {
+                Invoke-RestMethod -Method DELETE -Headers $hdr -Uri ("https://api.tailscale.com/api/v2/device/{0}" -f $d.id) | Out-Null
               }
             }
-          } catch { Write-Warning "Exit purge failed: $_" }
+          } catch {}
