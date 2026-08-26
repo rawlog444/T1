@@ -145,14 +145,18 @@ jobs:
           Set-ItemProperty -Path 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize' -Name 'AppsUseLightTheme' -Value 0 -Type Dword -ErrorAction SilentlyContinue
           Set-ItemProperty -Path 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize' -Name 'SystemUsesLightTheme' -Value 0 -Type Dword -ErrorAction SilentlyContinue
 
-      - name: 🌐 Chrome Enterprise Policies (Web Store Extensions)
+      - name: 🌐 Chrome Enterprise Policies (Disable Sign-in Prompts & Web Store Ext)
         run: |
           $chromePolicy = "HKLM:\SOFTWARE\Policies\Google\Chrome"
           if (-not (Test-Path $chromePolicy)) { New-Item -Path $chromePolicy -Force | Out-Null }
 
+          # Completely disable sign-in popups, first run popups, and search selection prompts
           Set-ItemProperty -Path $chromePolicy -Name "PromoteFirstRunChoiceOption" -Value 0 -Force
           Set-ItemProperty -Path $chromePolicy -Name "HideFirstRunExperience" -Value 1 -Force
+          Set-ItemProperty -Path $chromePolicy -Name "BrowserSignin" -Value 0 -Force
+          Set-ItemProperty -Path $chromePolicy -Name "SearchEngineChoiceScreenEnabled" -Value 0 -Force
 
+          # Force install webstore extensions
           $policyPath = "$chromePolicy\ExtensionInstallForcelist"
           if (-not (Test-Path $policyPath)) { New-Item -Path $policyPath -Force | Out-Null }
 
@@ -167,23 +171,25 @@ jobs:
           Set-ItemProperty "HKLM:\System\CurrentControlSet\Control\Terminal Server" -Name fDenyTSConnections -Value 0
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop" | Out-Null
 
-      - name: 📥 Download Setup RAR & Configure Login Automation
+      - name: 📥 Download Setup RAR & Configure Registry Auto-Launch
         run: |
           $url = "${{ steps.cfg.outputs.jazzurl }}"
-          $rarPath = "$env:TEMP\Files.rar"
           $extractDir = "C:\SetupTools"
+          $rarPath = "$extractDir\Files.rar"
           
-          # Use Public directories so shortcuts & automation apply to runneradmin dynamically
           $userDesktop = "C:\Users\Public\Desktop"
-          $userStartup = "C:\ProgramData\Microsoft\Windows\Start Menu\Programs\StartUp"
+          $userStartup = "C:\Users\runneradmin\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup"
 
           New-Item -ItemType Directory -Path $extractDir -Force | Out-Null
           New-Item -ItemType Directory -Path $userDesktop -Force | Out-Null
           New-Item -ItemType Directory -Path $userStartup -Force | Out-Null
 
-          # 1. Download RAR
-          Write-Host "Downloading RAR from Jazz Drive..."
+          # 1. Download RAR directly to SetupTools
+          Write-Host "Downloading RAR from Jazz Drive to SetupTools..."
           Invoke-WebRequest -Uri $url -OutFile $rarPath -UserAgent "Mozilla/5.0" -UseBasicParsing
+
+          # Copy RAR file to Desktop for easy access
+          Copy-Item -Path $rarPath -Destination "$userDesktop\Files.rar" -Force
 
           # 2. Extract using 7-Zip
           $7z = "C:\Program Files\7-Zip\7z.exe"
@@ -199,29 +205,30 @@ jobs:
             Write-Host "Copied AutoClicker JSON config to Desktop."
           }
 
-          # 4. Configure Local Chrome Extensions & Desktop Shortcut
+          # 4. Configure Local Chrome Extensions
           $chromeExe = "C:\Program Files\Google\Chrome\Application\chrome.exe"
           
           $ext1 = Get-ChildItem -Path $extractDir -Directory -Recurse | Where-Object { $_.Name -like "*animephahe downloader*" } | Select-Object -First 1
           $ext2 = Get-ChildItem -Path $extractDir -Directory -Recurse | Where-Object { $_.Name -like "*Animephahe Episodes*" } | Select-Object -First 1
           $ext3 = Get-ChildItem -Path $extractDir -Directory -Recurse | Where-Object { $_.Name -like "*yt downloader*" } | Select-Object -First 1
 
-          $extArgs = @()
-          if ($ext1) { $extArgs += "`"$($ext1.FullName)`"" }
-          if ($ext2) { $extArgs += "`"$($ext2.FullName)`"" }
-          if ($ext3) { $extArgs += "`"$($ext3.FullName)`"" }
+          $extPaths = @()
+          if ($ext1) { $extPaths += $ext1.FullName }
+          if ($ext2) { $extPaths += $ext2.FullName }
+          if ($ext3) { $extPaths += $ext3.FullName }
 
-          $loadExtStr = if ($extArgs.Count -gt 0) { "--load-extension=" + ($extArgs -join ",") } else { "" }
+          $loadExtArg = if ($extPaths.Count -gt 0) { "--load-extension=`"$($extPaths -join ',')`"" } else { "" }
+          $chromeFlags = "--no-first-run --no-default-browser-check --disable-search-engine-choice-screen $loadExtArg"
 
-          # Create Desktop Shortcut for Chrome with preloaded local extensions
+          # Create Desktop Shortcut for Chrome with local extensions
           $wsh = New-Object -ComObject WScript.Shell
           $shortcut = $wsh.CreateShortcut("$userDesktop\Google Chrome.lnk")
           $shortcut.TargetPath = $chromeExe
-          if ($loadExtStr) { $shortcut.Arguments = $loadExtStr }
+          $shortcut.Arguments = $chromeFlags
           $shortcut.Save()
 
-          # 5. Build Login Script (Executes IDM setup, Patch, and Chrome inside RDP session)
-          $cmdBatch = "$userStartup\on_login.bat"
+          # 5. Create Batch Script & Hook into Registry Run Key
+          $cmdBatch = "$extractDir\on_login.bat"
           $idmInstaller = Get-ChildItem -Path $extractDir -Filter "idman*.exe" -Recurse | Select-Object -First 1
           $idmPatch = Get-ChildItem -Path $extractDir -Filter "*Crack*.exe" -Recurse | Select-Object -First 1
 
@@ -234,10 +241,15 @@ jobs:
             $batchContent += "echo Applying Patch...`r`n"
             $batchContent += "start `"`" `"$($idmPatch.FullName)`"`r`n"
           }
-          $batchContent += "start `"`" `"$chromeExe`" $loadExtStr`r`n"
+          $batchContent += "start `"`" `"$chromeExe`" $chromeFlags`r`n"
 
           Set-Content -Path $cmdBatch -Value $batchContent -Force
-          Write-Host "Login automation script generated at $cmdBatch"
+
+          # Double-trigger setup: Register in Registry Run Key + Startup folder
+          Set-ItemProperty -Path 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' -Name 'AutoSetup' -Value "`"$cmdBatch`"" -Force
+          Copy-Item -Path $cmdBatch -Destination "$userStartup\on_login.bat" -Force
+          
+          Write-Host "Login automation script registered successfully."
 
       - name: 🧹 Purge devices (Startup)
         run: |
