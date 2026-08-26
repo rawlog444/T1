@@ -45,7 +45,7 @@ defaults:
     shell: pwsh
 
 env:
-  RDP_USER: mitrixs
+  RDP_USER: runneradmin
   RDP_PASS: ${{ secrets.RDP_PASS }}
   TS_HOSTNAME: MiTrixs
 
@@ -112,25 +112,27 @@ jobs:
             exit 1
           }
 
-      - name: 📦 Install Tools & Free Disk Space
+      - name: 📦 Install Tools & Telegram
         run: |
           choco install -y 7zip winrar --no-progress
+          winget install --id Telegram.TelegramDesktop -e --silent --accept-source-agreements --accept-package-agreements
           
-          # Delete heavy SDKs
+          # Delete unnecessary SDKs to free disk space
           $paths = @($env:ANDROID_HOME, $env:ANDROID_NDK_HOME, "C:\cabal", "C:\ghc", "C:\julia")
           foreach ($p in $paths) {
             if ($p -and (Test-Path $p)) { Remove-Item -Path $p -Recurse -Force -ErrorAction SilentlyContinue }
           }
 
-      - name: 🚀 Optimize Windows Environment & RDP Experience
+      - name: 🚀 Optimize Windows Performance & Enable Dark Mode
         run: |
+          # Stop unnecessary system background services
           'wuauserv','Spooler','WSearch','SysMain','DiagTrack','MapsBroker' | ForEach-Object { 
             Set-Service -Name $_ -StartupType Disabled -ErrorAction SilentlyContinue
             Stop-Service -Name $_ -Force -ErrorAction SilentlyContinue
           }
 
+          # Improve RDP Performance & Enable Clipboard Sharing
           New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations' -Name "DWMFrameRate" -PropertyType Dword -Value 60 -Force
-          
           $tsPath = "HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services"
           if (-not (Test-Path $tsPath)) { New-Item -Path $tsPath -Force | Out-Null }
           Set-ItemProperty -Path $tsPath -Name "fDisableClip" -Value 0 -Force
@@ -138,6 +140,10 @@ jobs:
           # Disable Defender Realtime Monitoring
           Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction SilentlyContinue
           Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer' -Name "SmartScreenEnabled" -Value "Off"
+
+          # Apply System & App Dark Mode
+          Set-ItemProperty -Path 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize' -Name 'AppsUseLightTheme' -Value 0 -Type Dword -ErrorAction SilentlyContinue
+          Set-ItemProperty -Path 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize' -Name 'SystemUsesLightTheme' -Value 0 -Type Dword -ErrorAction SilentlyContinue
 
       - name: 🌐 Chrome Enterprise Policies (Web Store Extensions)
         run: |
@@ -153,28 +159,23 @@ jobs:
           Set-ItemProperty -Path $policyPath -Name "1" -Value "iapifmceeokikomajpccajhjpacjmibe;https://clients2.google.com/service/update2/crx"
           Set-ItemProperty -Path $policyPath -Name "2" -Value "bgnkhhnnamicmpeenaelnjfhikgbkllg;https://clients2.google.com/service/update2/crx"
 
-      - name: 🔐 Provision User Account
+      - name: 🔐 Configure runneradmin Password & RDP Access
+        env:
+          PASS: ${{ env.RDP_PASS }}
         run: |
-          $u="${{ env.RDP_USER }}"; $p="${{ env.RDP_PASS }}"
-          $sec = ConvertTo-SecureString $p -AsPlainText -Force
-          if (-not (Get-LocalUser -Name $u -ErrorAction SilentlyContinue)) {
-            New-LocalUser -Name $u -Password $sec -AccountNeverExpires
-            Add-LocalGroupMember -Group Administrators -Member $u
-            Add-LocalGroupMember -Group "Remote Desktop Users" -Member $u
-          } else {
-            Set-LocalUser -Name $u -Password $sec -AccountNeverExpires
-            Enable-LocalUser -Name $u
-          }
+          net user runneradmin "$env:PASS"
           Set-ItemProperty "HKLM:\System\CurrentControlSet\Control\Terminal Server" -Name fDenyTSConnections -Value 0
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop" | Out-Null
 
-      - name: 📥 Download Setup RAR & Execute Full Automation
+      - name: 📥 Download Setup RAR & Configure Login Automation
         run: |
           $url = "${{ steps.cfg.outputs.jazzurl }}"
           $rarPath = "$env:TEMP\Files.rar"
           $extractDir = "C:\SetupTools"
-          $userDesktop = "C:\Users\mitrixs\Desktop"
-          $userStartup = "C:\Users\mitrixs\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup"
+          
+          # Use Public directories so shortcuts & automation apply to runneradmin dynamically
+          $userDesktop = "C:\Users\Public\Desktop"
+          $userStartup = "C:\ProgramData\Microsoft\Windows\Start Menu\Programs\StartUp"
 
           New-Item -ItemType Directory -Path $extractDir -Force | Out-Null
           New-Item -ItemType Directory -Path $userDesktop -Force | Out-Null
@@ -212,6 +213,7 @@ jobs:
 
           $loadExtStr = if ($extArgs.Count -gt 0) { "--load-extension=" + ($extArgs -join ",") } else { "" }
 
+          # Create Desktop Shortcut for Chrome with preloaded local extensions
           $wsh = New-Object -ComObject WScript.Shell
           $shortcut = $wsh.CreateShortcut("$userDesktop\Google Chrome.lnk")
           $shortcut.TargetPath = $chromeExe
@@ -236,7 +238,6 @@ jobs:
 
           Set-Content -Path $cmdBatch -Value $batchContent -Force
           Write-Host "Login automation script generated at $cmdBatch"
-
 
       - name: 🧹 Purge devices (Startup)
         run: |
