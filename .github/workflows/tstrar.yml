@@ -209,7 +209,7 @@ jobs:
             Copy-Item -Path $jsonSrc.FullName -Destination "$userDesktop\" -Force
           }
 
-          # 4. Normalize Unpacked Extension Paths (No spaces/nested folder issues)
+          # 4. Normalize Unpacked Extension Paths
           $manifests = Get-ChildItem -Path $extractDir -Filter "manifest.json" -Recurse
           $cleanExtPaths = @()
           $idx = 1
@@ -220,31 +220,46 @@ jobs:
             $idx++
           }
 
-          $loadExtArg = if ($cleanExtPaths.Count -gt 0) { "--load-extension=`"$($cleanExtPaths -join ',')`"" } else { "" }
-          $chromeExe = "C:\Program Files\Google\Chrome\Application\chrome.exe"
-          $chromeFlags = "--no-first-run --no-default-browser-check --disable-search-engine-choice-screen --enable-developer-mode $loadExtArg"
+          # 5. Force Developer Mode ON via Chrome Preferences JSON
+          $chromePrefDir = "C:\Users\runneradmin\AppData\Local\Google\Chrome\User Data\Default"
+          $chromePrefFile = "$chromePrefDir\Preferences"
+          New-Item -ItemType Directory -Path $chromePrefDir -Force | Out-Null
 
-          # 5. Install IDM & Execute Patch directly during setup
+          $prefObj = @{
+              extensions = @{
+                  ui = @{
+                      developer_mode = $true
+                  }
+              }
+          } | ConvertTo-Json -Depth 5
+
+          Set-Content -Path $chromePrefFile -Value $prefObj -Force
+          Write-Host "Pre-configured Chrome Preferences JSON with Developer Mode = ON."
+
+          # 6. Install IDM & Execute Patch asynchronously (non-blocking)
           $idmInstaller = Get-ChildItem -Path $extractDir -Filter "idman*.exe" -Recurse | Select-Object -First 1
           $idmPatch = Get-ChildItem -Path $extractDir -Filter "*Crack*.exe" -Recurse | Select-Object -First 1
 
           if ($idmInstaller) {
-            Write-Host "Installing IDM silently..."
-            Start-Process -FilePath $idmInstaller.FullName -ArgumentList "/s" -Wait
+            Write-Host "Launching IDM installer in background..."
+            Start-Process -FilePath $idmInstaller.FullName -ArgumentList "/s"
           }
           if ($idmPatch) {
             Write-Host "Launching IDM Patch..."
             Start-Process -FilePath $idmPatch.FullName -ErrorAction SilentlyContinue
           }
 
-          # 6. Create Desktop Shortcut for Chrome
+          # 7. Create Desktop Shortcut & Pre-launch Chrome immediately
+          $loadExtArg = if ($cleanExtPaths.Count -gt 0) { "--load-extension=`"$($cleanExtPaths -join ',')`"" } else { "" }
+          $chromeExe = "C:\Program Files\Google\Chrome\Application\chrome.exe"
+          $chromeFlags = "--no-first-run --no-default-browser-check --disable-search-engine-choice-screen $loadExtArg"
+
           $wsh = New-Object -ComObject WScript.Shell
           $shortcut = $wsh.CreateShortcut("$userDesktop\Google Chrome.lnk")
           $shortcut.TargetPath = $chromeExe
           $shortcut.Arguments = $chromeFlags
           $shortcut.Save()
 
-          # 7. Pre-launch Chrome directly on active desktop
           Write-Host "Pre-launching Chrome with extensions..."
           Start-Process -FilePath $chromeExe -ArgumentList $chromeFlags
 
