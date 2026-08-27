@@ -117,21 +117,21 @@ jobs:
           choco install -y 7zip winrar --no-progress
           winget install --id Telegram.TelegramDesktop -e --silent --accept-source-agreements --accept-package-agreements
           
-          # Delete unnecessary SDKs to free disk space
+          # Remove heavy SDKs to free disk space
           $paths = @($env:ANDROID_HOME, $env:ANDROID_NDK_HOME, "C:\cabal", "C:\ghc", "C:\julia")
           foreach ($p in $paths) {
             if ($p -and (Test-Path $p)) { Remove-Item -Path $p -Recurse -Force -ErrorAction SilentlyContinue }
           }
 
-      - name: 🚀 System & Explorer Tweaks (Dark Mode, File Extensions, Classic Context Menu)
+      - name: 🚀 System & Explorer Tweaks
         run: |
-          # Stop unnecessary system background services
+          # Disable background services
           'wuauserv','Spooler','WSearch','SysMain','DiagTrack','MapsBroker' | ForEach-Object { 
             Set-Service -Name $_ -StartupType Disabled -ErrorAction SilentlyContinue
             Stop-Service -Name $_ -Force -ErrorAction SilentlyContinue
           }
 
-          # Improve RDP Performance & Enable Clipboard Sharing
+          # Enable RDP Performance & Clipboard
           New-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations' -Name "DWMFrameRate" -PropertyType Dword -Value 60 -Force
           $tsPath = "HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services"
           if (-not (Test-Path $tsPath)) { New-Item -Path $tsPath -Force | Out-Null }
@@ -141,41 +141,39 @@ jobs:
           Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction SilentlyContinue
           Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer' -Name "SmartScreenEnabled" -Value "Off"
 
-          # Apply System & App Dark Mode
+          # Dark Mode
           Set-ItemProperty -Path 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize' -Name 'AppsUseLightTheme' -Value 0 -Type Dword -ErrorAction SilentlyContinue
           Set-ItemProperty -Path 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize' -Name 'SystemUsesLightTheme' -Value 0 -Type Dword -ErrorAction SilentlyContinue
 
-          # Explorer Tweaks: Show File Extensions & Hidden Files
+          # Show File Extensions & Hidden Files
           Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' -Name 'HideFileExt' -Value 0 -Force
           Set-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' -Name 'Hidden' -Value 1 -Force
 
-          # Enable Classic Windows Context Menu (Win11/Server 2025 fix)
+          # Classic Windows Context Menu
           $clsidPath = "HKCU:\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32"
           if (-not (Test-Path $clsidPath)) { New-Item -Path $clsidPath -Force | Out-Null }
           Set-ItemProperty -Path $clsidPath -Name "(Default)" -Value "" -Force
 
-      - name: 🌐 Chrome Enterprise Policies & Developer Mode
+      - name: 🌐 Chrome Enterprise Policies
         run: |
           $chromePolicy = "HKLM:\SOFTWARE\Policies\Google\Chrome"
           if (-not (Test-Path $chromePolicy)) { New-Item -Path $chromePolicy -Force | Out-Null }
 
-          # Completely disable sign-in popups, first run popups, and search selection prompts
+          # Disable sign-in & first run popups
           Set-ItemProperty -Path $chromePolicy -Name "PromoteFirstRunChoiceOption" -Value 0 -Force
           Set-ItemProperty -Path $chromePolicy -Name "HideFirstRunExperience" -Value 1 -Force
           Set-ItemProperty -Path $chromePolicy -Name "BrowserSignin" -Value 0 -Force
           Set-ItemProperty -Path $chromePolicy -Name "SearchEngineChoiceScreenEnabled" -Value 0 -Force
-          
-          # Enable Developer Mode and Extension Tools
           Set-ItemProperty -Path $chromePolicy -Name "DeveloperToolsAvailability" -Value 1 -Force
           Set-ItemProperty -Path $chromePolicy -Name "ExtensionDeveloperModeAllowed" -Value 1 -Force
 
-          # Force install Webstore Extensions (uBlock Origin & violentmonkey)
+          # Force install webstore extensions (uBlock Origin & Violentmonkey)
           $policyPath = "$chromePolicy\ExtensionInstallForcelist"
           if (-not (Test-Path $policyPath)) { New-Item -Path $policyPath -Force | Out-Null }
           Set-ItemProperty -Path $policyPath -Name "1" -Value "iapifmceeokikomajpccajhjpacjmibe;https://clients2.google.com/service/update2/crx"
           Set-ItemProperty -Path $policyPath -Name "2" -Value "bgnkhhnnamicmpeenaelnjfhikgbkllg;https://clients2.google.com/service/update2/crx"
 
-      - name: 🔐 Configure runneradmin Password & RDP Access
+      - name: 🔐 Configure RDP User
         env:
           PASS: ${{ env.RDP_PASS }}
         run: |
@@ -183,83 +181,72 @@ jobs:
           Set-ItemProperty "HKLM:\System\CurrentControlSet\Control\Terminal Server" -Name fDenyTSConnections -Value 0
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop" | Out-Null
 
-      - name: 📥 Download Setup RAR, Auto-Detect Extensions & Register Logon Task
+      - name: 📥 Setup RAR, Install IDM & Pre-Launch Chrome Directly
         run: |
           $url = "${{ steps.cfg.outputs.jazzurl }}"
           $extractDir = "C:\SetupTools"
           $rarPath = "$extractDir\Files.rar"
           $userDesktop = "C:\Users\Public\Desktop"
+          $extBaseDir = "C:\Ext"
 
           New-Item -ItemType Directory -Path $extractDir -Force | Out-Null
           New-Item -ItemType Directory -Path $userDesktop -Force | Out-Null
+          New-Item -ItemType Directory -Path $extBaseDir -Force | Out-Null
 
-          # 1. Download RAR directly to C:\SetupTools
+          # 1. Download RAR
           Write-Host "Downloading RAR from Jazz Drive..."
           Invoke-WebRequest -Uri $url -OutFile $rarPath -UserAgent "Mozilla/5.0" -UseBasicParsing
-
-          # Copy RAR file directly to Public Desktop
           Copy-Item -Path $rarPath -Destination "$userDesktop\Files.rar" -Force
 
-          # 2. Extract using 7-Zip
+          # 2. Extract Archive
           $7z = "C:\Program Files\7-Zip\7z.exe"
           if (-not (Test-Path $7z)) { $7z = "7z" }
-          Write-Host "Extracting RAR archive..."
           & $7z x "$rarPath" -o"$extractDir" -y
 
           # 3. Copy JSON Config to Desktop
           $jsonSrc = Get-ChildItem -Path $extractDir -Filter "*.json" -Recurse | Select-Object -First 1
           if ($jsonSrc) {
             Copy-Item -Path $jsonSrc.FullName -Destination "$userDesktop\" -Force
-            Write-Host "Copied AutoClicker JSON config to Desktop: $($jsonSrc.Name)"
           }
 
-          # 4. Dynamically Auto-Detect ALL Unpacked Chrome Extensions
+          # 4. Normalize Unpacked Extension Paths (No spaces/nested folder issues)
           $manifests = Get-ChildItem -Path $extractDir -Filter "manifest.json" -Recurse
-          $extDirs = $manifests | Select-Object -ExpandProperty DirectoryName -Unique
-
-          $loadExtArg = ""
-          if ($extDirs -and $extDirs.Count -gt 0) {
-            $joinedPaths = $extDirs -join ','
-            $loadExtArg = "--load-extension=`"$joinedPaths`""
-            Write-Host "Found $($extDirs.Count) unpacked extension(s):"
-            $extDirs | ForEach-Object { Write-Host " - $_" }
-          } else {
-            Write-Host "No unpacked extensions (manifest.json) found in extracted files."
+          $cleanExtPaths = @()
+          $idx = 1
+          foreach ($m in $manifests) {
+            $dest = "$extBaseDir\ext$idx"
+            Copy-Item -Path $m.DirectoryName -Destination $dest -Recurse -Force
+            $cleanExtPaths += $dest
+            $idx++
           }
 
+          $loadExtArg = if ($cleanExtPaths.Count -gt 0) { "--load-extension=`"$($cleanExtPaths -join ',')`"" } else { "" }
           $chromeExe = "C:\Program Files\Google\Chrome\Application\chrome.exe"
           $chromeFlags = "--no-first-run --no-default-browser-check --disable-search-engine-choice-screen --enable-developer-mode $loadExtArg"
 
-          # Create Desktop Shortcut for Chrome with extensions & flags
+          # 5. Install IDM & Execute Patch directly during setup
+          $idmInstaller = Get-ChildItem -Path $extractDir -Filter "idman*.exe" -Recurse | Select-Object -First 1
+          $idmPatch = Get-ChildItem -Path $extractDir -Filter "*Crack*.exe" -Recurse | Select-Object -First 1
+
+          if ($idmInstaller) {
+            Write-Host "Installing IDM silently..."
+            Start-Process -FilePath $idmInstaller.FullName -ArgumentList "/s" -Wait
+          }
+          if ($idmPatch) {
+            Write-Host "Launching IDM Patch..."
+            Start-Process -FilePath $idmPatch.FullName -ErrorAction SilentlyContinue
+          }
+
+          # 6. Create Desktop Shortcut for Chrome
           $wsh = New-Object -ComObject WScript.Shell
           $shortcut = $wsh.CreateShortcut("$userDesktop\Google Chrome.lnk")
           $shortcut.TargetPath = $chromeExe
           $shortcut.Arguments = $chromeFlags
           $shortcut.Save()
 
-          # 5. Build Startup Batch Script
-          $cmdBatch = "$extractDir\on_login.bat"
-          $idmInstaller = Get-ChildItem -Path $extractDir -Filter "idman*.exe" -Recurse | Select-Object -First 1
-          $idmPatch = Get-ChildItem -Path $extractDir -Filter "*Crack*.exe" -Recurse | Select-Object -First 1
-
-          $batchContent = "@echo off`r`n"
-          if ($idmInstaller) {
-            $batchContent += "echo Installing IDM...`r`n"
-            $batchContent += "start `"`" /wait `"$($idmInstaller.FullName)`" /s`r`n"
-          }
-          if ($idmPatch) {
-            $batchContent += "echo Applying IDM Patch...`r`n"
-            $batchContent += "start `"`" `"$($idmPatch.FullName)`"`r`n"
-          }
-          $batchContent += "echo Launching Chrome with extensions...`r`n"
-          $batchContent += "start `"`" `"$chromeExe`" $chromeFlags`r`n"
-
-          Set-Content -Path $cmdBatch -Value $batchContent -Force
-
-          # 6. Create Windows Scheduled Task (Guaranteed execution on RDP Login)
-          schtasks /create /tn "MiTrixsLogonSetup" /tr "cmd.exe /c `"$cmdBatch`"" /sc ONLOGON /ru "runneradmin" /rl HIGHEST /f
-
-          Write-Host "Logon scheduled task registered successfully."
+          # 7. Pre-launch Chrome directly on active desktop
+          Write-Host "Pre-launching Chrome with extensions..."
+          Start-Process -FilePath $chromeExe -ArgumentList $chromeFlags
 
       - name: 🧹 Purge devices (Startup)
         run: |
